@@ -1,0 +1,320 @@
+import re, random, time, requests, sys, json, html
+import http.client
+from http import *
+from colorama import * # Some colors to make the CLI seem a bit more lively to less fmailiar users.
+import urllib.parse
+from sp_asset_funcs import sp_lookup_asset
+from sassafras_funcs import sass_lookup_asset
+
+def queryAPI(data1, data2, mode): # Query API. Mode options passed as string.
+    snipeHost = "it-inventory"
+    with open(f"{snipeHost}.access-token","r") as file:
+        snipeAccessToken = file.readline().rstrip() # Get access token from file.
+    headers = {
+            "accept": "application/json",
+            "Authorization": "Bearer " + snipeAccessToken,
+            "Accept": "application/json"
+    }
+
+    if mode == 0: # Query for checking if an asset exists.
+        assetCheckURL = "https://it-inventory.ischool.uw.edu/api/v1/hardware/bytag/"
+        fullURL = assetCheckURL + urllib.parse.quote(str(data1)) + "?deleted=false" # Build the full URL for the query.
+        response = requests.get(fullURL, headers=headers)
+
+        if response.status_code != 200:
+            raise Exception((Fore.RED + 'FATAL: API request failure, status code not 200. Exiting program. Request data is as follows.' + str(response.text) + str(response.status_code) + fullURL))
+
+    elif mode == 1: # Query for checking if a desk (and therefore room) exists.
+        assetCheckURL = "https://it-inventory.ischool.uw.edu/api/v1/locations"
+        fullURL = assetCheckURL + "?name=" + (urllib.parse.quote(str(data1))) # Build the full URL for the query.
+        response = requests.get(fullURL, headers=headers)
+
+        if response.status_code != 200:
+            raise Exception((Fore.RED + 'FATAL: API request failure, status code not 200. Exiting program. Request data is as follows.' + str(response.text) + str(response.status_code) + fullURL))
+
+    elif mode == 2 or 3 or 4: # If any modes related to Sass/SharePoint are used, then we can use the same code and just return a different result.
+        assetTagQuery = data1
+        spAssetInfo = sp_lookup_asset(assetTagQuery)
+        if spAssetInfo:
+            serialNumberQuery = spAssetInfo['Serial']
+            sassAssetInfo = sass_lookup_asset(serialNumberQuery)
+            if sassAssetInfo:
+                if mode == 2:
+                    response = sassAssetInfo['SerialNumber']
+                elif mode == 3:
+                    response = sassAssetInfo['Model Number']
+                elif mode == 4:
+                    response = sassAssetInfo['Manufacturer']
+            else:
+                if mode == 2:
+                    response = spAssetInfo['Serial']
+                elif mode == 3:
+                    response = spAssetInfo['Model']
+                elif mode == 4:
+                    response = spAssetInfo['Brand']
+
+                printColoredError('Warning: Sass API error, nothing was found for this serial number/model/manufacturer. Using sharepoint data instead.')
+        else:
+            response = '[NO DATA - SP/SASS]'
+            printColoredError('SharePoint API error, nothing was found for this assetTag.')
+    
+    else: # Just in case, to catch if I mess up the code.
+        raise TypeError(('function queryAPI: Invalid mode input: ' + str(mode)))
+
+    return response
+
+def printColoredError(message): # Error text styling.
+    errorJokeTypes = ['PEBKAC', 'ID-10-t', 'invalidInput', 'biologicalProcessorFailure', '43-dd-1t04', 'iqMustNotBeNegative', 'notEnoughSkill', 'couldNotFindErrorMessage', 'probablyMicrosoft\\\'sFault', 'somethingWentWrongButWeWillNotTellYouWhat', 'OOPS']
+def printSystemMessage(message): # System message text styling.
+    scrollText(('\n' + Fore.BLUE + '[System] ') + Fore.CYAN + message)
+
+def scrollText(text):
+    fun = True
+    if fun == True:
+        for c in text:
+            sys.stdout.write(c)
+            sys.stdout.flush()
+            time.sleep(0.001)
+
+def serialModel(data): # This function gets information from Sass and SharePoint.
+
+    # Query the API, and store the text results in a dict even if they are "none".
+    printSystemMessage("Please wait, loading data from APIs...")
+    serialQuery = queryAPI(data, 'dummy', 2)
+    modelQuery = queryAPI(data, 'dummy', 3)
+    makeQuery = queryAPI(data, 'dummy', 4)
+
+    # Before storing in dict, we do need to extract the results from the query. This is not needed right now, but I will leave the logic here in case we need it later.
+    serialQueryResult = re.match(r"(.*)", serialQuery)
+    modelQueryResult = re.match(r"(.*)", modelQuery)
+    makeQueryResult = re.match(r"(.*)", makeQuery)
+
+    # Store the results in a query dict.
+    smmQueryResults = {
+        'serial' : serialQueryResult.group(1), 
+        'model'  : modelQueryResult.group(1),
+        'make'   : makeQueryResult.group(1)
+    }
+
+    printSystemMessage('Data retreived from APIs!') # This is just communicating to user that we got the data, then prints what it found.
+    printSystemMessage('automatedSerial: ' + Fore.MAGENTA + smmQueryResults['serial'])
+    printSystemMessage('automatedModel: ' + Fore.MAGENTA + smmQueryResults['model'])
+    printSystemMessage('automatedMake: ' + Fore.MAGENTA + smmQueryResults['make'])
+
+    userDataEdits = smmQueryResults # Initially set the user edited values to be the automated data.
+
+    printSystemMessage((Fore.YELLOW + "Would you like to edit any of this information? Type \"edit\" if you would like to edit something. Otherwise, press <ENTER>."))
+    quitSN = input('\n' + Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Edit or quit? " + Fore.LIGHTBLUE_EX)
+    if quitSN == "edit": # Asking the user if they want to edit the data
+        userWantsToStopEditing = False
+        while userWantsToStopEditing == False:
+            printSystemMessage((Fore.YELLOW + "Which information would you like to edit? " + Fore.CYAN + "Enter \"serial\" if you want to edit the serial number, \"model\" if you want to edit the model, or \"make\" if you want to edit the make."))
+            userEditChoice = input('\n' + Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Which value would you like to edit? " + Fore.LIGHTBLUE_EX)
+            # modify code to eventually ask for what they want to edit individually instead of typing everything
+            if userEditChoice == 'serial':
+                userInputSerial = input(Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Input new serial number: " + Fore.LIGHTBLUE_EX)
+                userDataEdits.update({
+                'serial' : userInputSerial
+            })
+                printSystemMessage('New serial set: ' + Fore.MAGENTA + userInputSerial)
+            
+            elif userEditChoice == 'model':
+                userInputModel = input(Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Input new model: " + Fore.LIGHTBLUE_EX)
+                userDataEdits.update({
+                'model' : userInputModel
+            })
+                printSystemMessage('New model set: ' + Fore.MAGENTA + userInputModel)
+
+            elif userEditChoice == 'make': 
+                userInputMake = input(Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Input new make: " + Fore.LIGHTBLUE_EX)
+                userDataEdits.update({
+                'make' :userInputMake
+            })
+                printSystemMessage('New make set: ' + Fore.MAGENTA + userInputMake)
+            
+            else:
+                printColoredError("Invalid editing  mode choice.")
+            
+            printSystemMessage('< > Current data < >')
+            printSystemMessage('Serial: ' + Fore.MAGENTA + userDataEdits['serial'])
+            printSystemMessage('Model: ' + Fore.MAGENTA + userDataEdits['model'])
+            printSystemMessage('Make: ' + Fore.MAGENTA + userDataEdits['make'])
+            printSystemMessage((Fore.YELLOW + "Would you like to edit any of this information further? Type \"edit\" if you would like to continue editing, or press <ENTER> to exit editing and push your changes."))
+            userStillEditing = input('\n' + Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Continue editing? " + Fore.LIGHTBLUE_EX)
+            if userStillEditing != 'edit':
+                userWantsToStopEditing = True
+            else:
+                printSystemMessage('Continuing editing.')
+                time.sleep(0.1)
+    else:
+        serial, model, make, isValidSerialModel = None, None, None, False
+        
+
+
+
+    isValidSerialModel = True # PLACEHOLDER FOR LOGIC TO CHECK IF SERIAL MODEL VALID
+
+    return userDataEdits['serial'], userDataEdits['model'], userDataEdits['make'], isValidSerialModel
+
+def checkAsset(deskID): # Check if our asset is valid and usable
+
+    assetTagInOldSystem = False # Replace with asset tag getting logic.
+    # ASSET TAGS WILL USE PREVIOUSLY GOTTEN DESK ID TO FIGURE OUT IF ITEM IS IN DATABASE AT ONCE
+
+    isValidTag = False
+    assetTag = input('\n' + Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Input asset tag: " + Fore.LIGHTBLUE_EX)
+    
+    isAssetTagValidCheck = re.match(r"^[0-9]{8}$", assetTag) # Handle errors, ensuring that asset tag is exactly 8 digits.
+    if not isAssetTagValidCheck:
+        printColoredError('assetTag input is not in a valid format. A valid assetTag should be a string of eight digits.')
+        isValidTag = False
+    else:
+        apiResponse = queryAPI(assetTag, "dummyData", 0) # Get an API query for if that asset tag exists.
+        apiErrorCheck = re.match(r"Asset does not exist", apiResponse.text) # Check if any of the dict has the right error. If so, then asset has not been found in system, so set that value to true. Otherwise, assume it has been found.
+        if re.match:
+            assetTagNotInSystem = True
+        else:
+            assetTagNotInSystem = False
+    
+        if assetTagNotInSystem == True:
+            if assetTagInOldSystem == True:
+                printSystemMessage("Asset found in old system! Importing asset details to new system.")
+                isValidTag = True
+            else: # If we cannot find the asset tag in SnipeIT, then query Sharepoint/Sass.
+                printSystemMessage('Asset tag not found in SnipeIT system. Querying Sharepoint and sass...')
+                a, b, c, d = serialModel(assetTag)
+                # eventually update desk
+                isValidTag = True
+                return assetTag, isValidTag, a, b, c
+        else: 
+            printColoredError('assetTag already found in current system!') # Tell the user the asset already exists.
+            isValidTag = False
+        return assetTag, isValidTag, None, None, None
+    
+
+def checkDesk():
+    isValidDesk = False
+    deskID = input('\n' + Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Input desk number/ID: " + Fore.LIGHTBLUE_EX)
+    isDeskIDValidCheck = re.match(r"^([A-Z]+\s[0-9]+[A-Z]+-[0-9]+)|([A-Z]+\s[0-9]+[A-Z]+)$", deskID)
+    
+    if not isDeskIDValidCheck: # Input validation.
+        printColoredError(('deskID \'' + deskID + '\' is not a valid ID for a desk. A deskID should be something like \"[BUILDING_ID] [ID_NUM][ID_LETTERS]-[ID_NUM]\"'))
+        isValidDesk = False
+        deskID = None
+    else:
+        deskIDSystemCheck = queryAPI(deskID, 'dummyData', 1) # Query location API.
+        doesDeskNotExist = re.match(r"\"total\":.0", deskIDSystemCheck.text) # Check if the desk does not exist by checking total matched.
+        if not doesDeskNotExist:
+            deskIDNotInSystem = False
+            isValidDesk = True
+            printSystemMessage('deskID found in system!')
+        else:
+            deskIDNotInSystem = True
+            isValidDesk = False
+            printColoredError('deskID not found in system. Please try again.')
+
+    return deskID, isValidDesk
+
+def checkSnipeForModel(model, assetTag):
+    print("placeholder")
+    snipeHost = "it-inventory"
+    offset = 0
+    endpoint =  f"/api/v1/models?limit=50&offset={offset}"
+    endpointFull = endpoint + f"&search={model}"
+    snipeAPIURL = urllib.parse.quote(endpointFull, safe=":/?=&")
+    models = {}
+    
+    with open(f"{snipeHost}.access-token","r") as file:
+        snipeAccessToken = file.readline().rstrip()
+    headers = {
+         "accept": "application/json",
+         "Content-Type": "application/json",
+         "Authorization": f"Bearer {snipeAccessToken}"
+      }
+    snipeKnowsAboutModel = False
+    # code go here lol
+
+    snipeHTTPConnection = http.client.HTTPSConnection(f"{snipeHost}.ischool.uw.edu", port=443)
+    snipeHTTPConnection.request(method="GET", url=snipeAPIURL, headers=headers)
+    response = snipeHTTPConnection.getresponse()
+
+    rawData = response.read()
+    data = json.loads(rawData)
+    formattedData = json.dumps(data, indent=4)
+
+    patternString = ('.*' + model + '.*')
+    patternComp = re.compile(patternString)
+    isFoundInSystem = re.match(patternComp, formattedData)
+    if isFoundInSystem:
+        #logic for we found something
+        snipeKnowsAboutModel = True
+    else:
+        snipeKnowsAboutModel = False
+        
+    return snipeKnowsAboutModel
+
+def sendDataToSnipe(assetTag, serial, model, make):
+    printSystemMessage('sendDataToSnipe: this is a test message this function currently does not do anything')
+
+
+def main():
+
+    # Check if desk is valid, if it is not repeat the query to the user.
+    deskID, isValidDesk = checkDesk()
+    while isValidDesk != True:
+        deskID, isValidDesk = checkDesk()
+    printSystemMessage('Desk ID Set: ' + Fore.MAGENTA + deskID)
+
+    # Check if desk is valid, if it is not repeat the query to the user.
+    snipeUserLoop = True
+    while snipeUserLoop == True:
+        assetTagInput, isValidTag, serial, model, make = checkAsset(deskID) 
+        while isValidTag != True:
+            assetTagInput, isValidTag, serial, model, make = checkAsset(deskID)
+        # check snipe for model number
+        # if snipe knows about it go ahead
+        # if snipe does not throw an error and call check asset again
+        printSystemMessage('Checking to see if SnipeIT has this model in the database...')
+        snipeCheck = checkSnipeForModel(model, assetTagInput)
+        if snipeCheck != True:
+            snipeUserLoop == True
+            printColoredError(('Model number/ID \'' + model +  '\' not found in SnipeIT.'))
+            printSystemMessage(('Would you like to re-enter the data in case you got it wrong?'))
+            doesUserWantToRetryData = input('\n' + Fore.BLUE + "[Interface] " + Fore.LIGHTGREEN_EX + "Press <ENTER> to skip, or type \"retry\" to re-enter the data." + Fore.LIGHTBLUE_EX)
+            if doesUserWantToRetryData == 'retry':
+                printSystemMessage('Retrying asset data entry...')
+                snipeUserLoop = True
+            else:
+                snipeUserLoop = False
+                printSystemMessage('Skipping data re-entry. Looping...')
+                printSystemMessage('Asset Number set: ' + Fore.MAGENTA + assetTagInput)
+                printSystemMessage('Serial set: ' + Fore.MAGENTA + serial)
+                printSystemMessage('Model set: ' + Fore.MAGENTA + model)
+                printSystemMessage('Make set: ' + Fore.MAGENTA + make)
+
+                printSystemMessage("Adding information to SnipeIT \"database\"...")
+                sendDataToSnipe(None, None, None, None, None)
+                printSystemMessage("Data added.")
+                printSystemMessage("Looping...")
+                continue
+
+        
+        elif snipeCheck == True:
+                snipeUserLoop = False
+                printSystemMessage('Model found in SnipeIT! Finalizing...')
+                printSystemMessage('Asset Number set: ' + Fore.MAGENTA + assetTagInput)
+                printSystemMessage('Serial set: ' + Fore.MAGENTA + serial)
+                printSystemMessage('Model set: ' + Fore.MAGENTA + model)
+                printSystemMessage('Make set: ' + Fore.MAGENTA + make)
+
+                printSystemMessage("Adding information to SnipeIT \"database\"...")
+                sendDataToSnipe(None, None, None, None, None)
+                printSystemMessage("Data added.")
+                printSystemMessage("Looping...")
+        else:
+            raise Exception ("lmao how did this boolean become not one")
+
+
+
+while 1 == 1:
+    main()
